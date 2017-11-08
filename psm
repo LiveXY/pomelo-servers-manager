@@ -1,0 +1,706 @@
+#!/usr/bin/env node
+
+var cp = require('child_process');
+var fs = require("fs");
+var adminClient = require('pomelo-admin').adminClient;
+var async = require("async");
+var cliff = require("cliff");
+var readline = require('readline');
+
+function pomeloServerManager() {
+	var env = 'production';
+	var config = {};
+
+	var hallpath = '';
+	var cmd = '';
+	var command = '';
+	var pomelopath = '';
+
+	function now() {
+		var date = new Date();
+		var year = date.getFullYear();
+		var month = date.getMonth()+1;
+		var day = date.getDate();
+		var hour = date.getHours();
+		var minute = date.getMinutes();
+		var second = date.getSeconds();
+		var ss = year + '-';
+		ss += (month < 10 ? ('0' + month) : month) + '-';
+		ss += (day < 10 ? ('0' + day) : day) + ' ';
+		ss += (hour < 10 ? ('0' + hour) : hour) + ':';
+		ss += (minute < 10 ? ('0' + minute) : minute) + ':';
+		ss += second < 10 ? ('0' + second) : second;
+		return ss;
+	}
+	function write(msg) {
+		if (!hallpath) return;
+		msg = msg.replace(/\[\d+m/g, '').replace(//g, '') + '\n';
+		fs.appendFile(hallpath + '/logs/psm.log', msg, 'utf8');
+	}
+	function info(msg) {
+		msg = now() + ' [INFO] ' + msg;
+		console.log(msg);
+		write(msg);
+	}
+	function error(msg) {
+		msg = now() + ' [ERROR] ' + msg;
+		console.error(msg);
+		write(msg);
+	}
+	function joinParams(o) {
+		var params = [];
+		for (var k in o) {
+			params.push(k+'='+o[k]);
+		}
+		return params.join(' ');
+	}
+	function loadPomeloPath() {
+		return exec('which pomelo').then(function(data) {
+			data = data.replace(/\n/g, '');
+			pomelopath = data;
+			return data;
+		});
+	}
+	function checkPomeloPath(p) {
+		if (!p) return error('无法获取pomelo路径');
+		return true;
+	}
+	function checkCMD(c) {
+		return ['start', 'stop', 'restart', 'repair', 'list', 'servers', 'connections', 'gamehub', 'ps', 'kill', 'get', 'set', 'getmain', 'setmain', 'check', 'config'].indexOf(c) === -1;
+	}
+	function paramError() {
+		console.error('参数错误！\n\
+psm list/servers/connections/ps/gamehub/start/stop/restart/repair/kill path [ids]\n\n\
+实例：\n\
+psm list /path	 查看server状态，+rss\n\
+psm servers /path	 查看server状态，+port\n\
+psm connections /path 查看前端链接用户数\n\
+psm ps /path		 查看server进程\n\
+psm start /path	 启动server\n\
+psm stop /path	 停止server\n\
+psm check /path	 检查server\n\
+psm repair /path	 恢复server\n\
+psm config /path	 查看server配置\n\
+psm restart /path	 重启server\n\
+psm kill /path	 终止server进程 用于执行stop后没有停止server的清理\n\n\
+psm start /path db-server-1 db-server-2	 启动指定的server\n\
+psm stop /path db-server-1 db-server-2	 停止指定的server\n\
+psm restart /path db-server-1 db-server-2	 重启指定的server\n\n\
+psm getmain /path	 	 获取master参数main的值\n\
+psm setmain /path	 	 修改master参数main=启动文件路径\n\
+psm get /path id key	 	 获取server配置\n\
+psm set /path id key value	 修改server配置\n\n\
+crontab -e\n\
+* * * * * /usr/bin/psm repair /path >> /dev/null 2>&1');
+		return false;
+	}
+	function checkParam() {
+		if (process.argv.length < 3) return paramError();
+		if (process.argv.length === 3 && checkCMD(process.argv[2])) return paramError();
+		if (process.argv.length >= 4) {
+			if (checkCMD(process.argv[2]) && checkCMD(process.argv[3])) return paramError();
+			if (checkCMD(process.argv[2])) {
+				cmd = process.argv[3];
+				hallpath = process.argv[2];
+			} else {
+				cmd = process.argv[2];
+				hallpath = process.argv[3];
+			}
+		} else {
+			cmd = process.argv[2];
+			hallpath = '.';
+		}
+		if (hallpath.substring(hallpath.length - 1) === '/') hallpath = hallpath.substring(0, hallpath.length - 1);
+		if (hallpath.substring(hallpath.length - 1) === '/') hallpath = hallpath.substring(0, hallpath.length - 1);
+		if (hallpath.substring(hallpath.length - 1) === '/') hallpath = hallpath.substring(0, hallpath.length - 1);
+		return true;
+	}
+	function getEnvConfig (c) {
+		if (c && c[env]) return c[env];
+		return null;
+	}
+	function loadMaster() {
+		var c = null;
+		try {
+			c = require(hallpath + '/config/master.json');
+		} catch (err) {
+			error('/config/master.json 文件错误：\n' + err.message);
+			process.exit(0);
+		}
+		c = getEnvConfig(c);
+		if (!c) return error('/config/master.json文件无' + env + '配置');
+		config.master = c;
+		return true;
+	}
+	function loadUser() {
+		var c = null;
+		try {
+			c = require(hallpath + '/config/adminUser.json');
+		} catch (err) {
+			error('/config/adminUser.json 文件错误：\n' + err.message);
+			process.exit(0);
+		}
+		if (!c || !Array.isArray(c) || c.length < 1) return error('/config/adminUser.json文件未配置用户');
+		config.user = c[0];
+		command = ' -P ' + config.master.port + ' -u ' + config.user.username + ' -p ' + config.user.password + ' ';
+		return true;
+	}
+	function loadServers() {
+		var c = null;
+		try {
+			c = require(hallpath + '/config/servers.json');
+		} catch (err) {
+			error('/config/servers.json 文件错误：\n' + err.message);
+			process.exit(0);
+		}
+		c = getEnvConfig(c);
+		if (!c) return error('/config/servers.json文件无' + env + '配置');
+		config.servers = c;
+		config.cmds = {};
+		for (var serverType in config.servers) {
+			for (var k2 in config.servers[serverType]) {
+				var o = config.servers[serverType][k2];
+				o.serverType = serverType;
+				if (o['clusterCount']) {
+					var len = parseInt(o['clusterCount']) || 1;
+					var id = 'cluster-server-' + serverType;
+					var port = parseInt(o.port.replace(/\+/g, '')) || 0;
+					var useClientPort = !!o['clientPort'];
+					var clientPort = useClientPort ? (parseInt(o.clientPort.replace(/\+/g, '')) || 0) : 0;
+					delete o.clusterCount;
+					for (var k3 = 0; k3 < len; k3++) {
+						o.id = id + '-' + k3;
+						o.port = port + k3;
+						if (useClientPort) o.clientPort = clientPort + k3;
+						config.cmds[o.id] = pomelopath + command + 'add ' + joinParams(o);
+					}
+				} else {
+					config.cmds[o.id] = pomelopath + command + 'add ' + joinParams(o);
+				}
+			}
+		}
+		return true;
+	}
+	function exec(cmd, option) {
+		return new Promise(function(resolve, reject) {
+			cp.exec(cmd, option, function(err, stdout, stderr) {
+				if (err) error(cmd + ' 执行错误：\n' + err.message);
+				if (stderr) error(cmd + ' 执行失败：\n' + stderr);
+				resolve(err ? '' : stdout);
+			});
+		});
+	}
+	function loadList() {
+		return exec(pomelopath + command + 'list').then(function(d) {
+			if (d.indexOf('socket is error') !== -1) {
+				d = '';
+				config.rpclist = '游戏未启动';
+			} else {
+				config.rpclist = d;
+			}
+			var list = [];
+			var ds = d.split('\n');
+			if (ds.length > 3) ds.splice(0, 2);
+			for (var i in ds) {
+				if (!ds[i]) continue;
+				var index = ds[i].indexOf(' ');
+				var id = ds[i].substring(0, index);
+				list.push(id);
+			}
+			config.rpcs = list;
+			return list;
+		});
+	}
+	function stop() {
+		if (process.argv.length >= 5) {
+			return stopRpc();
+		} else {
+			return stopAll().then(ps).then(kill);
+		}
+	}
+	function start() {
+		if (process.argv.length >= 5) {
+			return loadList().then(startRpc);
+		} else {
+			return startAll();
+		}
+	}
+	function restart() {
+		if (process.argv.length >= 5) {
+			return restartRpc();
+		} else {
+			return restartAll();
+		}
+	}
+	function getMsg1(r, def) {
+		if (r.indexOf('socket is error') !== -1) return '游戏未启动\n' + r;
+		return def + '成功！\n' + r;
+	}
+	function getMsg2(r, def, ex) {
+		if (r.indexOf('socket is error') !== -1) return '游戏未启动\n' + (ex ? (ex + '\n') : '') + r;
+		if (r.indexOf('Successfully') !== -1) return def + '成功！\n' + (ex ? (ex + '\n') : '') + r;
+		return def + '失败！\n' + (ex ? (ex + '\n') : '') + r;
+	}
+	function stopAll() {
+		var stopCMD = pomelopath + command + 'stop';
+		return exec(stopCMD).then(function(r) {
+			info(getMsg1(r, '停止all server'));
+			return true;
+		});
+	}
+	function startAll() {
+		var strartCMD = pomelopath + ' start -e ' + env + ' -D -d ' + hallpath;
+		return exec(strartCMD).then(function(r) {
+			info(getMsg1(r, '启动all server'));
+			return true;
+		});
+	}
+	function restartAll() { return stopAll().then(ps).then(kill).then(startAll); }
+	function startRpc(list) {
+		var ids = [];
+		for (var i = 4; i < process.argv.length; i++) {
+			var id = process.argv[i];
+			if (!config.cmds[id]) {
+				error('/config/servers.json 中无 ' + id + ' 配置');
+				continue;
+			}
+			if (list.indexOf(id) !== -1) {
+				info(id + ' 已经启动');
+				continue;
+			}
+			ids.push(id);
+		}
+		if (ids.length === 0) return Promise.resolve(true);
+
+		return new Promise(function(resolve, reject) {
+			var next = function(i) {
+				if (i >= ids.length) { resolve(true); return; }
+				var id = ids[i];
+				exec(config.cmds[id]).then(function(r) {
+					info(getMsg2(r, '启动' + id, config.cmds[id]));
+					next(i+1);
+				});
+			}
+			next(0);
+		});
+	}
+	function stopRpc() {
+		var list = [];
+		for (var i = 4; i < process.argv.length; i++) list.push(process.argv[i]);
+		var stopCMD = pomelopath + command + 'stop ' + list.join(' ');
+		return exec(stopCMD).then(function(r) {
+			info(getMsg1(r, '停止' + list.join(',')));
+			return true;
+		});
+	}
+	function restartRpc() { return stopRpc().then(loadList).then(startRpc); }
+	function repair(list) {
+		if (list.length == 0) {
+			error('游戏未启动');
+			Promise.resolve(false);
+			return false;
+		}
+		var all = [], ids = [];
+		for (var id in config.cmds) {
+			if (list.indexOf(id) === -1) {
+				ids.push(id);
+				all.push(exec(config.cmds[id]));
+				continue;
+			}
+		}
+		return Promise.all(all).then(function(r) {
+			var msg = '';
+			for (var i in r) info(ids[i] + ' 已恢复正常：' + r[i])
+			return true;
+		});
+	}
+
+	this.start = function (p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (!loadServers()) return;
+		start();
+	}
+	this.stop = function (p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定停止所有server吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+			if (line === 'y') stop().then(function() { process.exit(0); });
+			else process.exit(0);
+		});
+	}
+	this.restart = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (!loadServers()) return;
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定重启所有server吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+			if (line === 'y') restart().then(function() { process.exit(0); });
+			else process.exit(0);
+		});
+	}
+	this.repair = function (p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (!loadServers()) return;
+		loadList().then(repair);
+	}
+	this.list = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		loadList().then(function() {
+			if (config.rpclist.indexOf('serverType') !== -1) info(config.rpclist);
+			else error(config.rpclist);
+		});
+	}
+
+	function conn(cb) {
+		client = new adminClient({ username: config.user.username, password: config.user.password, md5: true });
+		var id = 'rpc_man_' + Date.now();
+		client.connect(id, config.master.host, config.master.port, function(err) {
+			if (err) {
+				console.error(err);
+				process.exit(0);
+			} else {
+				cb(client);
+			}
+		});
+		client.on('close', function() {
+			client.socket.disconnect();
+			console.error('断开链接');
+			process.exit(0);
+		});
+	}
+	function getColor(len) {
+		var color = [];
+		for (var i = 0; i < len; i++) color.push('blue');
+		return color;
+	}
+	function servers() {
+		conn(function(client) {
+			client.request('watchServer', {
+				comd: 'servers',
+				param: '',
+				context: 'all'
+			}, function(err, data) {
+				if (err) return console.log(err);
+				var msg = data.msg;
+				var rows = [];
+				var header = [];
+				var results = [];
+				header.push(['serverId', 'serverType', 'host', 'port', 'pid', 'heapUsed(M)', 'uptime(m)']);
+				var color = getColor(header[0].length);
+				for (var key in msg) {
+					var server = msg[key];
+					if (!server['port']) server['port'] = null;
+					rows.push([server['serverId'], server['serverType'], server['host'], server['port'], server['pid'], server['heapUsed'], server['uptime']]);
+				}
+				async.sortBy(rows, function(server, callback) {
+					callback(null, server[0]);
+				}, function(err, _results) {
+					results = header.concat(_results);
+					console.log(cliff.stringifyRows(results, color));
+					process.exit(0);
+				});
+			});
+		})
+	}
+	this.servers = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		servers();
+	}
+	function connections() {
+		conn(function(client) {
+			client.request('watchServer', {
+				comd: 'connections',
+				param: '',
+				context: 'all'
+			}, function(err, data) {
+				if (err) return console.log(err);
+				var msg = data.msg;
+				var rows = [];
+				var color = getColor(3);
+				rows.push(['serverId', 'totalConnCount', 'loginedCount']);
+				var sumConnCount = 0, sumloginedCount = 0;
+				for (var key in msg) {
+					var server = msg[key];
+					rows.push([server['serverId'], server['totalConnCount'], server['loginedCount']]);
+					sumConnCount += server['totalConnCount'];
+					sumloginedCount += server['loginedCount'];
+				}
+				rows.push(['sum connections', sumConnCount, sumloginedCount]);
+				console.log(cliff.stringifyRows(rows, color));
+				process.exit(0);
+			});
+		})
+	}
+	this.connections = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		connections();
+	}
+	function getip() {
+		return exec('ip add').then(function(d) {
+			if (!d) return exec('ifconfig');
+			return d;
+		}).then(function(d) {
+			var ips = [];
+			var list = d.split('\n');
+			for (var i in list) {
+				var line = list[i];
+				if (line.indexOf('inet ') !== -1) {
+					line = line.split(' ');
+					if (line.length > 1) {
+						line = line[1].split('/')[0];
+						if (['127.0.0.1', 'localhost'].indexOf(line) !== -1) continue;
+						ips.push(line);
+					}
+				}
+			}
+			ips.push('127.0.0.1');
+			ips.push('localhost');
+			return ips;
+		});
+	}
+	function ps() { return exec('ps aux | grep node | grep "' + hallpath + '"'); }
+	this.ps = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		ps().then(function(r) {
+			var msg = '查看启动进程：\n', len = 0;
+			r = r.split('\n');
+			for (var i in r) {
+				var line = r[i];
+				if (!line) continue;
+				if (line.indexOf(' ps aux ') !== -1) continue;
+				if (line.indexOf(' grep ') !== -1) continue;
+				if (line.indexOf(' egrep ') !== -1) continue;
+				if (line.indexOf('psm ') !== -1) continue;
+				if (line.indexOf('node ' !== -1)) {
+					msg += line + '\n';
+					len++;
+				}
+			}
+			info(msg + '共 ' + len + ' 个进程！');
+		});
+	}
+	function kill(r) {
+		var pids = [];
+		r = r.split('\n');
+		for (var i in r) {
+			var line = r[i];
+			if (!line) continue;
+			if (line.indexOf(' ps aux ') !== -1) continue;
+			if (line.indexOf(' grep ') !== -1) continue;
+			if (line.indexOf(' egrep ') !== -1) continue;
+			if (line.indexOf('psm ') !== -1) continue;
+			if (line.indexOf('node ' !== -1)) {
+				var pid = parseInt(line.replace(/\s+/g, ' ').split(' ')[1]) || 0;
+				if (pid > 0) pids.push(pid);
+			}
+		}
+		if (pids.length > 0) {
+			return exec('kill -9 ' + pids.join(' ')).then(function(r) {
+				info('终止进程：' + pids.join(' '));
+				return true;
+			});
+		} else {
+			info('无进程要终止');
+			return Promise.resolve(true);
+		}
+	}
+	this.kill = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定终止所有server吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+			if (line === 'y') ps().then(kill).then(function() { process.exit(0); });
+			else process.exit(0);
+		});
+	}
+	function get() {
+		var key = process.argv[4];
+		var id = config.master.id;
+		if (process.argv.length === 6) {
+			id = process.argv[4];
+			key = process.argv[5];
+		}
+		return new Promise(function(resolve, reject) {
+			conn(function(client) {
+				client.request('watchServer', {
+					comd: 'get',
+					param: key,
+					context: id
+				}, function(err, data) {
+					if (err) return error(err.message); else info('get ' + key + '：\n' + data);
+					resolve(true);
+				});
+			});
+		});
+	}
+	this.get = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (process.argv.length < 5) return error('参数错误 缺少key');
+		get().then(function () { process.exit(0); });
+	}
+	function set() {
+		var key = process.argv[4];
+		var value = process.argv[5];
+		var id = config.master.id;
+		if (process.argv.length === 6) {
+			id = process.argv[4];
+			key = process.argv[5];
+			value = process.argv[6];
+		}
+		return new Promise(function(resolve, reject) {
+			conn(function(client) {
+				client.request('watchServer', {
+					comd: 'set',
+					param: { key: key, value: value },
+					context: config.master.id
+				}, function(err, data) {
+					if (err) return error(err.message); else info(data);
+					resolve(true);
+				});
+			});
+		});
+	}
+	this.set = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (process.argv.length < 6) return error('参数错误 缺少key value');
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定修改系统配置吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+			if (line === 'y') set().then(function () { process.exit(0); });
+			else process.exit(0);
+		});
+	}
+	function setmain() {
+		return new Promise(function(resolve, reject) {
+			conn(function(client) {
+				client.request('watchServer', {
+					comd: 'set',
+					param: { key: 'main', value: hallpath + '/app.js' },
+					context: config.master.id
+				}, function(err, data) {
+					if (err) return error(err.message); else info(data);
+					resolve(true);
+				});
+			});
+		});
+	}
+	this.setmain = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定修改系统配置吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+			if (line === 'y') setmain().then(function () { process.exit(0); });
+			else process.exit(0);
+		});
+	}
+	function getmain() {
+		return new Promise(function(resolve, reject) {
+			conn(function(client) {
+				client.request('watchServer', {
+					comd: 'get',
+					param: 'main',
+					context: config.master.id
+				}, function(err, data) {
+					if (err) return error(err.message); else info(data);
+					resolve(true);
+				});
+			});
+		});
+	}
+	this.getmain = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		getmain().then(function () { process.exit(0); });
+	}
+	function check(list) {
+		if (list.length == 0) {
+			error('游戏未启动');
+			Promise.resolve(false);
+			return false;
+		}
+		var flag = false;
+		for (var id in config.cmds) {
+			if (list.indexOf(id) === -1) {
+				info(id + ' 未启动');
+				flag = true;
+				continue;
+			}
+		}
+		if (list.indexOf(config.master.id) === -1) {
+			info(config.master.id + ' 未启动');
+			error('游戏未启动');
+			flag = true;
+		}
+		if (!flag) info('全部server正常');
+		return Promise.resolve(true);
+	}
+	this.check = function (p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (!loadServers()) return;
+		loadList().then(check);
+	}
+	function conf(list) {
+		var msg = 'master:\n';
+		msg += JSON.stringify(config.master);
+		msg += '\n\nuser:\n' + JSON.stringify(config.user);
+		msg += '\n\n';
+		for (var k in config.servers) {
+			msg += k + ':\n';
+			for (var k2 in config.servers[k]) {
+				msg += JSON.stringify(config.servers[k][k2]) + '\n';
+			}
+			msg += '\n';
+		}
+		info('配置信息：\n' + msg);
+		return Promise.resolve(true);
+	}
+	this.config = function (p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (!loadServers()) return;
+		loadList().then(conf);
+	}
+	if (!checkParam()) return;
+	if (this[cmd]) loadPomeloPath().then(this[cmd]);
+}
+
+pomeloServerManager();
