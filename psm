@@ -806,7 +806,7 @@ crontab -e\n\
 				next(i+1);
 			});
 		}
-		if (iplist === '0') info('暂无SSH服务器');
+		if (iplist.length === '0') info('暂无SSH服务器');
 		next(0);
 	}
 	this.testssh = function(p) {
