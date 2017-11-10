@@ -66,11 +66,11 @@ function pomeloServerManager() {
 		return true;
 	}
 	function checkCMD(c) {
-		return ['start', 'stop', 'restart', 'repair', 'list', 'servers', 'connections', 'ps', 'kill', 'get', 'set', 'getmain', 'setmain', 'check', 'config', 'dumpmem', 'dumpcpu', 'run'].indexOf(c) === -1;
+		return ['start', 'stop', 'restart', 'repair', 'list', 'servers', 'connections', 'ps', 'kill', 'get', 'set', 'getmain', 'setmain', 'check', 'config', 'dumpmem', 'dumpcpu', 'run', 'testssh'].indexOf(c) === -1;
 	}
 	function paramError() {
 		console.error('参数错误！\n\
-psm list/servers/connections/ps/start/stop/check/config/restart/repair/kill/getmain/setmain/get/set/dumpmem/dumpcpu/run path [ids]\n\n\
+psm list/servers/connections/ps/start/stop/check/config/restart/repair/kill/getmain/setmain/get/set/dumpmem/dumpcpu/run/testssh path [ids]\n\n\
 实例：\n\
 psm list /path	 查看server状态，+rss\n\
 psm servers /path	 查看server状态，+port\n\
@@ -86,6 +86,7 @@ psm kill /path	 终止server进程 用于执行stop后没有停止server的清�
 psm start /path db-server-1 db-server-2		 启动指定的server\n\
 psm stop /path db-server-1 db-server-2		 停止指定的server\n\
 psm restart /path db-server-1 db-server-2	 重启指定的server\n\n\
+psm testssh /path [user]	 测试SSH服务器\n\
 psm getmain /path	 	 获取master参数main的值\n\
 psm setmain /path	 	 修改master参数main=启动文件路径\n\
 psm get /path id key	 	 获取server配置\n\
@@ -161,6 +162,7 @@ crontab -e\n\
 		if (!c) return error('/config/servers.json文件无' + env + '配置');
 		config.servers = c;
 		config.cmds = {};
+		config.hosts = {};
 		for (var serverType in config.servers) {
 			for (var k2 in config.servers[serverType]) {
 				var o = config.servers[serverType][k2];
@@ -177,20 +179,24 @@ crontab -e\n\
 						o.port = port + k3;
 						if (useClientPort) o.clientPort = clientPort + k3;
 						config.cmds[o.id] = pomelopath + command + 'add ' + joinParams(o);
+						config.hosts[o.id] = [o.host, o.port, o.id];
 					}
 				} else {
 					config.cmds[o.id] = pomelopath + command + 'add ' + joinParams(o);
+					config.hosts[o.id] = [o.host, o.port, o.id];
 				}
 			}
 		}
 		return true;
 	}
-	function exec(cmd, option) {
+	function exec(cmd, showerr) {
+		showerr = typeof showerr == 'boolean' ? showerr : true;
 		return new Promise(function(resolve, reject) {
-			cp.exec(cmd, option, function(err, stdout, stderr) {
-				if (err) error(cmd + ' 执行错误：\n' + err.message);
-				if (stderr) error(cmd + ' 执行失败：\n' + stderr);
-				resolve(err ? '' : stdout);
+			cp.exec(cmd, function(err, stdout, stderr) {
+				if (err && showerr) error(cmd + ' 执行错误：\n' + err.message);
+				if (stderr && showerr) error(cmd + ' 执行失败：\n' + stderr);
+				if (showerr) resolve(err ? '' : stdout);
+				else resolve(err || stderr || stdout);
 			});
 		});
 	}
@@ -779,6 +785,36 @@ crontab -e\n\
 		    if (line === 'y') run(id, code).then(function (data) { info('执行结果：\n' + data); process.exit(0); });
 		    else process.exit(0);
 		});
+	}
+	function testssh(ips) {
+		var user = process.argv.length === 4 ? process.argv[4] : 'root';
+		var iplist = [];
+		for (var id in config.hosts) {
+			var ip = config.hosts[id];
+			if (ips.indexOf(ip[0]) === -1) iplist.push(ip);
+		}
+		var next = function(i) {
+			if (i >= iplist.length) return;
+			var ip = iplist[i][0];
+			var port = iplist[i][1];
+			var id = iplist[i][2];
+			exec('ssh root@' + ip + ' ls | wc -l', false).then(function(r) {
+				if (typeof r !== 'string') r = r.message;
+				r = r.indexOf('Connection timed out') === -1;
+				if (r) info(id + ' ' + ip + ' ' + port + ' 测试成功！');
+				else error(id + ' ' + ip + ' ' + port + ' 测试失败！');
+				next(i+1);
+			});
+		}
+		if (iplist === '0') info('暂无SSH服务器');
+		next(0);
+	}
+	this.testssh = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (!loadServers()) return;
+		getip().then(testssh);
 	}
 	if (!checkParam()) return;
 	if (this[cmd]) loadPomeloPath().then(this[cmd]);
