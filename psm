@@ -472,7 +472,7 @@ crontab -e\n\
 			var ips = [];
 			var list = d.split('\n');
 			for (var i in list) {
-				var line = list[i];
+				var line = list[i].replace(/(^\s*)|(\s*$)/g, "");
 				if (line.indexOf('inet ') !== -1) {
 					line = line.split(' ');
 					if (line.length > 1) {
