@@ -66,11 +66,11 @@ function pomeloServerManager() {
 		return true;
 	}
 	function checkCMD(c) {
-		return ['start', 'stop', 'restart', 'repair', 'list', 'servers', 'connections', 'gamehub', 'ps', 'kill', 'get', 'set', 'getmain', 'setmain', 'check', 'config'].indexOf(c) === -1;
+		return ['start', 'stop', 'restart', 'repair', 'list', 'servers', 'connections', 'ps', 'kill', 'get', 'set', 'getmain', 'setmain', 'check', 'config', 'dumpmem', 'dumpcpu', 'run'].indexOf(c) === -1;
 	}
 	function paramError() {
 		console.error('参数错误！\n\
-psm list/servers/connections/ps/gamehub/start/stop/restart/repair/kill path [ids]\n\n\
+psm list/servers/connections/ps/start/stop/check/config/restart/repair/kill/getmain/setmain/get/set/dumpmem/dumpcpu/run path [ids]\n\n\
 实例：\n\
 psm list /path	 查看server状态，+rss\n\
 psm servers /path	 查看server状态，+port\n\
@@ -83,13 +83,17 @@ psm repair /path	 恢复server\n\
 psm config /path	 查看server配置\n\
 psm restart /path	 重启server\n\
 psm kill /path	 终止server进程 用于执行stop后没有停止server的清理\n\n\
-psm start /path db-server-1 db-server-2	 启动指定的server\n\
-psm stop /path db-server-1 db-server-2	 停止指定的server\n\
+psm start /path db-server-1 db-server-2		 启动指定的server\n\
+psm stop /path db-server-1 db-server-2		 停止指定的server\n\
 psm restart /path db-server-1 db-server-2	 重启指定的server\n\n\
 psm getmain /path	 	 获取master参数main的值\n\
 psm setmain /path	 	 修改master参数main=启动文件路径\n\
 psm get /path id key	 	 获取server配置\n\
 psm set /path id key value	 修改server配置\n\n\
+psm dumpmem /path id	 	 生成server的memory dump文件\n\
+psm dumpcpu /path id [times]	 生成server的cpu dump文件\n\n\
+psm run /path id code		 运行代码\n\
+psm run /path db-server-1 app.get\\(\\"user\\"\\).getOnlineUsers\\(\\)\n\n\
 crontab -e\n\
 * * * * * /usr/bin/psm repair /path >> /dev/null 2>&1');
 		return false;
@@ -698,6 +702,83 @@ crontab -e\n\
 		if (!loadUser()) return;
 		if (!loadServers()) return;
 		loadList().then(conf);
+	}
+	function dump(comd, id, times) {
+		var param = { filepath: hallpath + '/logs/' + now().replace(/ |-|:/g, ''), force: true }
+		if (comd === 'cpu') param.times = times;
+		return new Promise(function(resolve, reject) {
+			conn(function(client) {
+				client.request('watchServer', {
+					comd: comd,
+					param: param,
+					context: id
+				}, function(err, data) {
+					if (err) return error(err.message); else info(data);
+					resolve(true);
+				});
+			});
+		});
+	}
+	this.dumpmem = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (process.argv.length < 5) return error('参数错误');
+		var id = process.argv[4];
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定生成 ' + id + ' 的 memory dump 文件吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+		    if (line === 'y') dump('memory', id).then(function () { process.exit(0); });
+		    else process.exit(0);
+		});
+	}
+	this.dumpcpu = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (process.argv.length < 5) return error('参数错误');
+		var id = process.argv[4];
+		var times = process.argv.length == 5 ? 5 : (parseInt(process.argv[5]) || 5);
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定生成 ' + id + ' 的 ' + times + ' 秒 cpu dump 文件吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+		    if (line === 'y') dump('cpu', id, times).then(function () { process.exit(0); });
+		    else process.exit(0);
+		});
+	}
+	function run(id, code) {
+		return new Promise(function(resolve, reject) {
+			conn(function(client) {
+				client.request('watchServer', {
+					comd: 'run',
+					context: id,
+					param: code
+				}, function(err, data) {
+					if (err) return error(err.message);
+					resolve(data);
+				});
+			});
+		});
+	}
+	this.run = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (process.argv.length < 6) return error('参数错误');
+		var id = process.argv[4];
+		var code = process.argv[5];
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定 ' + id + ' 运行 ' + code + ' 吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+		    if (line === 'y') run(id, code).then(function (data) { info('执行结果：\n' + data); process.exit(0); });
+		    else process.exit(0);
+		});
 	}
 	if (!checkParam()) return;
 	if (this[cmd]) loadPomeloPath().then(this[cmd]);
