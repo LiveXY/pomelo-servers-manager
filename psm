@@ -859,13 +859,15 @@ crontab -e\n\
 		});
 	}
 	function pm2restart(p) {
-		var restartPM2 = pomelopath.replace('/pomelo', '/pm2') + ' restart ' + hallpath + '/app.js';
-		return exec(restartPM2).then(function(r, e) {
-			if (r.indexOf('│ online │') !== -1) {
-				info('pm2重启' + hallpath + '成功！');
-				return checkpm2(p);
-			} else error('pm2停止' + hallpath + '失败！');
-			return true;
+		return pm2stop(p).then(function(){
+			var restartPM2 = pomelopath.replace('/pomelo', '/pm2') + ' restart ' + hallpath + '/app.js';
+			return exec(restartPM2).then(function(r, e) {
+				if (r.indexOf('│ online │') !== -1) {
+					info('pm2重启' + hallpath + '成功！');
+					return checkpm2(p);
+				} else error('pm2停止' + hallpath + '失败！');
+				return true;
+			});
 		});
 	}
 	function pm2delete(p) {
