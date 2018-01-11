@@ -66,7 +66,7 @@ function pomeloServerManager() {
 		return true;
 	}
 	function checkCMD(c) {
-		return ['start', 'stop', 'restart', 'repair', 'list', 'servers', 'connections', 'ps', 'kill', 'get', 'set', 'getmain', 'setmain', 'check', 'config', 'dumpmem', 'dumpcpu', 'run', 'testssh'].indexOf(c) === -1;
+		return ['start', 'stop', 'restart', 'repair', 'list', 'servers', 'connections', 'ps', 'kill', 'get', 'set', 'getmain', 'setmain', 'check', 'config', 'dumpmem', 'dumpcpu', 'run', 'testssh', 'pm2start', 'pm2stop', 'pm2restart', 'pm2delete'].indexOf(c) === -1;
 	}
 	function paramError() {
 		console.error('参数错误！\n\
@@ -77,11 +77,15 @@ psm servers /path	 查看server状态，+port\n\
 psm connections /path 查看前端链接用户数\n\
 psm ps /path		 查看server进程\n\
 psm start /path	 启动server\n\
+psm pm2start /path name	 启动server\n\
 psm stop /path	 停止server\n\
+psm pm2stop /path	 停止server\n\
 psm check /path	 检查server\n\
 psm repair /path	 恢复server\n\
 psm config /path	 查看server配置\n\
 psm restart /path	 重启server\n\
+psm pm2restart /path	 重启server\n\
+psm pm2delete /path	 删除server\n\
 psm kill /path	 终止server进程 用于执行stop后没有停止server的清理\n\n\
 psm start /path db-server-1 db-server-2		 启动指定的server\n\
 psm stop /path db-server-1 db-server-2		 停止指定的server\n\
@@ -364,7 +368,7 @@ crontab -e\n\
 		if (!loadMaster()) return;
 		if (!loadUser()) return;
 		if (!loadServers()) return;
-		loadList().then(repair);
+		return loadList().then(repair);
 	}
 	this.list = function(p) {
 		if (!checkPomeloPath(p)) return;
@@ -492,7 +496,7 @@ crontab -e\n\
 		if (!checkPomeloPath(p)) return;
 		if (!loadMaster()) return;
 		if (!loadUser()) return;
-		ps().then(function(r) {
+		return ps().then(function(r) {
 			var msg = '查看启动进程：\n', len = 0;
 			r = r.split('\n');
 			for (var i in r) {
@@ -508,6 +512,7 @@ crontab -e\n\
 				}
 			}
 			info(msg + '共 ' + len + ' 个进程！');
+			return len;
 		});
 	}
 	function kill(r) {
@@ -816,6 +821,108 @@ crontab -e\n\
 		if (!loadServers()) return;
 		getip().then(testssh);
 	}
+
+	function checkpm2(p) {
+		var me = this;
+		return new Promise(function(resolve, reject) {
+			var i = 0, max = 5;
+			var next = function() {
+				if (i >= max) return resolve(false);
+				return me.ps(p).then(function(r) {
+					if (r > 1) return setmain().then(function(r){ return me.repair(p); }).then(function(){ resolve(true); process.exit(0); });
+					i++;
+					setTimeout(next, 1000);
+				});
+			}
+			next();
+		});
+	}
+	function pm2start(p) {
+		var name = process.argv.length >= 5 ? (' -n ' + process.argv[4]) : '';
+		var strartPM2 = pomelopath.replace('/pomelo', '/pm2') + ' start ' + hallpath + '/app.js' + name;
+		return exec(strartPM2).then(function(r) {
+			if (r.indexOf('│ online │') !== -1) {
+				info('pm2启动' + hallpath + '成功！');
+				return checkpm2(p);
+			} else {
+				error('pm2启动' + hallpath + '失败！');
+				return true;
+			}
+		});
+	}
+	function pm2stop(p) {
+		var stopPM2 = pomelopath.replace('/pomelo', '/pm2') + ' stop ' + hallpath + '/app.js';
+		return exec(stopPM2).then(function(r, e) {
+			if (r.indexOf('│ stopped │') !== -1) info('pm2停止' + hallpath + '成功！');
+			else error('pm2停止' + hallpath + '失败！');
+			return ps().then(kill);
+		});
+	}
+	function pm2restart(p) {
+		var restartPM2 = pomelopath.replace('/pomelo', '/pm2') + ' restart ' + hallpath + '/app.js';
+		return exec(restartPM2).then(function(r, e) {
+			if (r.indexOf('│ online │') !== -1) {
+				info('pm2重启' + hallpath + '成功！');
+				return checkpm2(p);
+			} else error('pm2停止' + hallpath + '失败！');
+			return true;
+		});
+	}
+	function pm2delete(p) {
+		var stopPM2 = pomelopath.replace('/pomelo', '/pm2') + ' delete ' + hallpath + '/app.js';
+		return exec(stopPM2).then(function(r, e) {
+			info('pm2删除' + hallpath + '成功！');
+			return ps().then(kill);
+		});
+	}
+	this.pm2start = function (p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (!loadServers()) return;
+		pm2start(p);
+	}
+	this.pm2stop = function (p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定停止pm2启动的server吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+		    if (line === 'y') pm2stop(p).then(function() { process.exit(0); });
+		    else process.exit(0);
+		});
+	}
+	this.pm2restart = function(p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		if (!loadServers()) return;
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定重启pm2启动server吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+		    if (line === 'y') pm2restart(p).then(function() { process.exit(0); });
+		    else process.exit(0);
+		});
+	}
+	this.pm2delete = function (p) {
+		if (!checkPomeloPath(p)) return;
+		if (!loadMaster()) return;
+		if (!loadUser()) return;
+		var rl = readline.createInterface(process.stdin, process.stdout);
+		rl.setPrompt('确定删除pm2启动的server吗？y/n > ');
+  		rl.prompt();
+		rl.on('line', function(line) {
+			line = line.trim().toLowerCase()
+		    if (line === 'y') pm2delete(p).then(function() { process.exit(0); });
+		    else process.exit(0);
+		});
+	}
+
 	if (!checkParam()) return;
 	if (this[cmd]) loadPomeloPath().then(this[cmd]);
 }
