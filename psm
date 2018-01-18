@@ -35,7 +35,7 @@ function pomeloServerManager() {
 	function write(msg) {
 		if (!hallpath) return;
 		msg = msg.replace(/\[\d+m/g, '').replace(//g, '') + '\n';
-		fs.appendFile(hallpath + '/logs/psm.log', msg, 'utf8');
+		fs.appendFileSync(hallpath + '/logs/psm.log', msg, 'utf8');
 	}
 	function info(msg) {
 		msg = now() + ' [INFO] ' + msg;
