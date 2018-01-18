@@ -839,8 +839,8 @@ crontab -e\n\
 	}
 	function pm2start(p) {
 		var name = process.argv.length >= 5 ? (' -n ' + process.argv[4]) : '';
-		var strartPM2 = pomelopath.replace('/pomelo', '/pm2') + ' start ' + hallpath + '/app.js' + name;
-		return exec(strartPM2).then(function(r) {
+		var startPM2 = 'NODE_ENV=' + env + ' ' + pomelopath.replace('/pomelo', '/pm2') + ' start ' + hallpath + '/app.js' + name;
+		return exec(startPM2).then(function(r) {
 			if (r.indexOf('│ online │') !== -1) {
 				info('pm2启动' + hallpath + '成功！');
 				return checkpm2(p);
@@ -860,7 +860,7 @@ crontab -e\n\
 	}
 	function pm2restart(p) {
 		return pm2stop(p).then(function(){
-			var restartPM2 = pomelopath.replace('/pomelo', '/pm2') + ' restart ' + hallpath + '/app.js';
+			var restartPM2 = 'NODE_ENV=' + env + ' ' + pomelopath.replace('/pomelo', '/pm2') + ' restart ' + hallpath + '/app.js';
 			return exec(restartPM2).then(function(r, e) {
 				if (r.indexOf('│ online │') !== -1) {
 					info('pm2重启' + hallpath + '成功！');
