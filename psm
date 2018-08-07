@@ -104,6 +104,8 @@ crontab -e\n\
 		return false;
 	}
 	function checkParam() {
+		var fi = process.argv.indexOf('-f');
+		if (fi !== -1) { force = true; delete process.argv[fi]; }
 		if (process.argv.length < 3) return paramError();
 		if (process.argv.length === 3 && checkCMD(process.argv[2])) return paramError();
 		if (process.argv.length >= 4) {
@@ -340,6 +342,8 @@ crontab -e\n\
 		if (!checkPomeloPath(p)) return;
 		if (!loadMaster()) return;
 		if (!loadUser()) return;
+		if (force) return stop().then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定停止所有server吗？y/n > ');
   		rl.prompt();
@@ -354,6 +358,8 @@ crontab -e\n\
 		if (!loadMaster()) return;
 		if (!loadUser()) return;
 		if (!loadServers()) return;
+		if (force) return restart().then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定重启所有server吗？y/n > ');
   		rl.prompt();
@@ -544,6 +550,8 @@ crontab -e\n\
 		if (!checkPomeloPath(p)) return;
 		if (!loadMaster()) return;
 		if (!loadUser()) return;
+		if (force) return ps().then(kill).then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定终止所有server吗？y/n > ');
   		rl.prompt();
@@ -607,6 +615,8 @@ crontab -e\n\
 		if (!loadMaster()) return;
 		if (!loadUser()) return;
 		if (process.argv.length < 6) return error('参数错误 缺少key value');
+		if (force) return set().then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定修改系统配置吗？y/n > ');
   		rl.prompt();
@@ -634,6 +644,8 @@ crontab -e\n\
 		if (!checkPomeloPath(p)) return;
 		if (!loadMaster()) return;
 		if (!loadUser()) return;
+		if (force) return setmain().then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定修改系统配置吗？y/n > ');
   		rl.prompt();
@@ -736,6 +748,8 @@ crontab -e\n\
 		if (!loadUser()) return;
 		if (process.argv.length < 5) return error('参数错误');
 		var id = process.argv[4];
+		if (force) return dump('memory', id).then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定生成 ' + id + ' 的 memory dump 文件吗？y/n > ');
   		rl.prompt();
@@ -752,6 +766,8 @@ crontab -e\n\
 		if (process.argv.length < 5) return error('参数错误');
 		var id = process.argv[4];
 		var times = process.argv.length == 5 ? 5 : (parseInt(process.argv[5]) || 5);
+		if (force) return dump('cpu', id, times).then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定生成 ' + id + ' 的 ' + times + ' 秒 cpu dump 文件吗？y/n > ');
   		rl.prompt();
@@ -782,6 +798,8 @@ crontab -e\n\
 		if (process.argv.length < 6) return error('参数错误');
 		var id = process.argv[4];
 		var code = process.argv[5];
+		if (force) return run(id, code).then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定 ' + id + ' 运行 ' + code + ' 吗？y/n > ');
   		rl.prompt();
@@ -888,6 +906,8 @@ crontab -e\n\
 		if (!checkPomeloPath(p)) return;
 		if (!loadMaster()) return;
 		if (!loadUser()) return;
+		if (force) return pm2stop(p).then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定停止pm2启动的server吗？y/n > ');
   		rl.prompt();
@@ -902,6 +922,8 @@ crontab -e\n\
 		if (!loadMaster()) return;
 		if (!loadUser()) return;
 		if (!loadServers()) return;
+		if (force) return pm2restart(p).then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定重启pm2启动server吗？y/n > ');
   		rl.prompt();
@@ -915,6 +937,8 @@ crontab -e\n\
 		if (!checkPomeloPath(p)) return;
 		if (!loadMaster()) return;
 		if (!loadUser()) return;
+		if (force) return pm2delete(p).then(function() { process.exit(0); });
+
 		var rl = readline.createInterface(process.stdin, process.stdout);
 		rl.setPrompt('确定删除pm2启动的server吗？y/n > ');
   		rl.prompt();
